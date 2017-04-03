@@ -84,29 +84,42 @@ function getCity(telegramId, chatId, withBack) {
     };
     bot.sendMessage(chatId, 'نام شهرتو بنویس', GetCityOpts).then(sent => {
         bot.onReplyToMessage(chatId, sent.message_id, reply => {
-            db.collection('users').update({
-                telegramId: telegramId
-            }, {
-                $set: {
-                    city: reply.text
-                }
-            }, (err) => {
-                if (err) return console.log(err)
-                bot.sendMessage(chatId, 'عالی! شهر برا شما تنظیم شد', opts);
-            })
+           checkIfCityExists(reply.text, err => {
+            if(err) return bot.sendMessage(chatId, 'متاسفانه این شهر پیدا نشد. دوباره امتحان کنید', {reply_markup: {force_reply: true}});
+                db.collection('users').update({
+                    telegramId: telegramId
+                }, {
+                    $set: {
+                        city: reply.text
+                    }
+                }, (err) => {
+                    if (err) return console.log(err)
+                    bot.sendMessage(chatId, 'عالی! شهر تنظیم شد', opts);
+                })
+           });
         })
     })
+}
+function checkIfCityExists(cityName, cb) {
+        request(`http://api.openweathermap.org/data/2.5/weather?q=${cityName}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+            if(error) return console.log(err);
+            var data = JSON.parse(body);
+            if(data.cod == "404") {
+                return cb('404');
+            }
+            cb('')
+        });
 }
 
 function handleTodayWeather(telegramId, chatId) {
     db.collection('users').find({
         telegramId: telegramId
     }).toArray((err, users) => {
-        request(`http://api.openweathermap.org/data/2.5/weather?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+        request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
             console.log('body:', body); // Print the HTML for the Google homepage.
-            bot.sendMessage(chatId, `هوای امروز ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).weather[0].main);
+            bot.sendMessage(chatId, `هوای امروز ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list[0].weather[0].main);
         });
     })
 }
@@ -116,11 +129,11 @@ function handleTomorrowWeather(telegramId, chatId) {
     db.collection('users').find({
         telegramId: telegramId
     }).toArray((err, users) => {
-        request(`http://api.openweathermap.org/data/2.5/forecast?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+        request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
             console.log('body:', body); // Print the HTML for the Google homepage.
-            bot.sendMessage(chatId, `هوای فردای ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list[0].weather[0].main);
+            bot.sendMessage(chatId, `هوای فردای ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list[1].weather[0].main);
         });
     })
 }
