@@ -8,6 +8,9 @@ app.set('port', (process.env.PORT || 5000));
 const MongoClient = require('mongodb').MongoClient
 const TB = require('node-telegram-bot-api');
 
+/*var kue = require('kue')
+  , queue = kue.createQueue();*/
+
 const url = process.env.APP_URL || 'https://ar-weather-bot.herokuapp.com:443';
 const token = '345786334:AAHvSLQT7UfKp6pzUwqkfWyuxu1WztuugbY';
 
@@ -69,15 +72,40 @@ MongoClient.connect('mongodb://alireza1619:rrr161920@ds147920.mlab.com:47920/wea
                 handleBack(msg.from.id, msg.chat.id);
                 break;
             case 'تغییر شهر':
-                getCity(msg.from.id, msg.chat.id, true);
+                getCity(msg.chat.id, true);
                 break;
+            case 'ارسال خودکار (به زودی)':
+                autoSend(msg.chat.id, 'showOpts');
             default:
-                handle5daysForecastWeather(msg.from.id, msg.chat.id, msg.text)
+                //handle5daysForecastWeather(msg.from.id, msg.chat.id, msg.text)
                 break;
         }
 
     })
 })
+
+function autoSend(chatId, type) {
+    db.collection('users').find({
+        chatId: chatId
+    }).toArray((err, users) => {
+        if (err) return console.log(err)
+        switch (type) {
+            case 'showOpts':
+                bot.sendMessage(chatId, 'چه ساعتی از روز پیام بفرستم؟', {
+                    reply_markup: JSON.stringify({
+                        keyboard: [
+                            ['6', '7', '8', '9', '10', '11'],
+                            ['12', '13', '14', '15', '16', '17'],
+                            ['18', '19', '20', '21', '22', '23'],
+                            ['24', '1', '2', '3', '4', '5'],
+                            ['بازگشت']
+                        ]
+                    })
+                })
+                break;
+        }
+    })
+}
 
 function handleStart(telegramId, chatId) {
     db.collection('users').insert({
@@ -87,11 +115,11 @@ function handleStart(telegramId, chatId) {
     }, (err) => {
         if (err) return console.log(err);
         bot.sendMessage(chatId, 'سلام');
-        getCity(telegramId, chatId, false);
+        getCity(chatId, false);
     });
 }
 
-function getCity(telegramId, chatId, withBack) {
+function getCity(chatId, withBack) {
     const GetCityOpts = {
         reply_markup: JSON.stringify({
             keyboard: withBack ? [
@@ -101,12 +129,12 @@ function getCity(telegramId, chatId, withBack) {
         })
     };
 
-    bot.sendMessage(chatId, 'نام شهرتو بنویس', GetCityOpts).then(sent => {
-        bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId, telegramId))
+    bot.sendMessage(chatId, 'نام شهرتو ( با حروف لاتین ) بنویس', GetCityOpts).then(sent => {
+        bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId))
     })
 }
 
-function onReplyToCityGet(sent, chatId, telegramId, reply) {
+function onReplyToCityGet(sent, chatId, reply) {
     const opts = {
         reply_markup: JSON.stringify({
             keyboard: [
@@ -115,25 +143,26 @@ function onReplyToCityGet(sent, chatId, telegramId, reply) {
             ]
         })
     };
-    checkIfCityExists(reply.text, (err, cityName) => {
+    checkIfCityExists(reply.text, (err, cityName, coord) => {
         if (err) return bot.sendMessage(chatId, 'متاسفانه این شهر پیدا نشد. دوباره امتحان کنید', {
             reply_markup: {
                 force_reply: true
             }
         }).then(sended => {
-            bot.onReplyToMessage(chatId, sended.message_id, onReplyToCityGet.bind(this, sended, chatId, telegramId))
+            bot.onReplyToMessage(chatId, sended.message_id, onReplyToCityGet.bind(this, sended, chatId))
         });
 
         db.collection('users').update({
-            telegramId: telegramId
+            chatId: chatId
         }, {
             $set: {
                 city: cityName
             }
         }, (err) => {
             if (err) return console.log(err)
+            bot.sendLocation(chatId, coord.lat, coord.lon)
             bot.sendMessage(chatId, ' عالی! شهر تنظیم شد به ' + cityName, opts);
-            bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId, telegramId))
+            bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId))
         })
     });
 }
@@ -145,7 +174,7 @@ function checkIfCityExists(cityName, cb) {
         if (data.cod == "404") {
             return cb('404');
         }
-        cb('', data.name)
+        cb('', data.name, data.coord)
     });
 }
 
@@ -165,6 +194,9 @@ function handleTodayWeather(telegramId, chatId, editMessageId) {
     db.collection('users').find({
         chatId: chatId
     }).toArray((err, users) => {
+        if (users.length === 0) {
+            return getCity(chatId, false)
+        }
         request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
@@ -216,6 +248,9 @@ function handleTomorrowWeather(telegramId, chatId, editMessageId) {
     db.collection('users').find({
         chatId: chatId
     }).toArray((err, users) => {
+        if (users.length === 0) {
+            return getCity(chatId, false)
+        }
         request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
@@ -277,8 +312,8 @@ function handle5daysForecastWeather(telegramId, chatId, city, editingMsgId) {
     db.collection('users').find({
         chatId: chatId
     }).toArray((err, users) => {
-        if (!users[0].city) {
-            return;
+        if (users.length === 0) {
+            return getCity(chatId, false)
         }
         request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
@@ -313,7 +348,8 @@ function handleSettings(telegramId, chatId) {
     const opts = {
         reply_markup: JSON.stringify({
             keyboard: [
-                ['تغییر شهر', 'بازگشت']
+                ['تغییر شهر', 'ارسال خودکار (به زودی)'],
+                ['بازگشت']
             ]
         })
     };
