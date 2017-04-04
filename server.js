@@ -1,7 +1,8 @@
 var express = require('express');
 var app = express();
 var request = require('request')
-
+var moment = require('moment')
+moment.locale('fa');
 app.set('port', (process.env.PORT || 5000));
 
 const MongoClient = require('mongodb').MongoClient
@@ -21,11 +22,33 @@ bot.setWebHook(`${url}/bot${token}`);
 
 var db
 
+var emojis = [
+    ['Rain', '🌧'],
+    ['Clear', '☀️'],
+    ['Clouds', '☁️'],
+    ['Snow', '❄️']
+];
+var descriptionToFa = [
+    ['light rain', 'باران خفیف'],
+    ['light snow', 'برف خفیف'],
+    ['sky is clear', 'آفتابی'],
+    ['snow', 'بارش برف'],
+    ['moderate rain', 'باران نیمه شدید'],
+    ['few clouds', 'کمی ابری'],
+    ['heavy intensity rain', 'باران بسیار شدید'],
+    ['broken clouds', 'ابرهای تکه تکه'],
+    ['overcast clouds', 'کاملا ابری'],
+    ['scattered clouds', 'ابرهای پراکنده']
+]
+
 MongoClient.connect('mongodb://alireza1619:rrr161920@ds147920.mlab.com:47920/weather_bot', function (err, database) {
     if (err) return console.log(err)
     db = database;
 
     bot.on('message', msg => {
+        if (['/emruz', '/farda', '/6ruz'].some(t => t == msg.text)) {
+            return;
+        }
         switch (msg.text) {
             case '/start':
                 handleStart(msg.from.id, msg.chat.id);
@@ -36,7 +59,7 @@ MongoClient.connect('mongodb://alireza1619:rrr161920@ds147920.mlab.com:47920/wea
             case 'هوای فردا':
                 handleTomorrowWeather(msg.from.id, msg.chat.id);
                 break;
-            case '5 روز آینده':
+            case '6 روز آینده':
                 handle5daysForecastWeather(msg.from.id, msg.chat.id);
                 break;
             case 'تنظیمات':
@@ -49,14 +72,17 @@ MongoClient.connect('mongodb://alireza1619:rrr161920@ds147920.mlab.com:47920/wea
                 getCity(msg.from.id, msg.chat.id, true);
                 break;
             default:
+                handle5daysForecastWeather(msg.from.id, msg.chat.id, msg.text)
                 break;
         }
+
     })
 })
 
 function handleStart(telegramId, chatId) {
     db.collection('users').insert({
         telegramId: telegramId,
+        chatId: chatId,
         city: ''
     }, (err) => {
         if (err) return console.log(err);
@@ -74,88 +100,215 @@ function getCity(telegramId, chatId, withBack) {
             force_reply: !withBack
         })
     };
+
+    bot.sendMessage(chatId, 'نام شهرتو بنویس', GetCityOpts).then(sent => {
+        bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId, telegramId))
+    })
+}
+
+function onReplyToCityGet(sent, chatId, telegramId, reply) {
     const opts = {
         reply_markup: JSON.stringify({
             keyboard: [
                 ['هوای امروز', 'هوای فردا'],
-                ['5 روز آینده', 'تنظیمات']
+                ['6 روز آینده', 'تنظیمات']
             ]
         })
     };
-    bot.sendMessage(chatId, 'نام شهرتو بنویس', GetCityOpts).then(sent => {
-        bot.onReplyToMessage(chatId, sent.message_id, reply => {
-           checkIfCityExists(reply.text, err => {
-            if(err) return bot.sendMessage(chatId, 'متاسفانه این شهر پیدا نشد. دوباره امتحان کنید', {reply_markup: {force_reply: true}});
-                db.collection('users').update({
-                    telegramId: telegramId
-                }, {
-                    $set: {
-                        city: reply.text
-                    }
-                }, (err) => {
-                    if (err) return console.log(err)
-                    bot.sendMessage(chatId, 'عالی! شهر تنظیم شد', opts);
-                })
-           });
-        })
-    })
-}
-function checkIfCityExists(cityName, cb) {
-        request(`http://api.openweathermap.org/data/2.5/weather?q=${cityName}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
-            if(error) return console.log(err);
-            var data = JSON.parse(body);
-            if(data.cod == "404") {
-                return cb('404');
+    checkIfCityExists(reply.text, (err, cityName) => {
+        if (err) return bot.sendMessage(chatId, 'متاسفانه این شهر پیدا نشد. دوباره امتحان کنید', {
+            reply_markup: {
+                force_reply: true
             }
-            cb('')
+        }).then(sended => {
+            bot.onReplyToMessage(chatId, sended.message_id, onReplyToCityGet.bind(this, sended, chatId, telegramId))
         });
+
+        db.collection('users').update({
+            telegramId: telegramId
+        }, {
+            $set: {
+                city: cityName
+            }
+        }, (err) => {
+            if (err) return console.log(err)
+            bot.sendMessage(chatId, ' عالی! شهر تنظیم شد به ' + cityName, opts);
+            bot.onReplyToMessage(chatId, sent.message_id, onReplyToCityGet.bind(this, sent, chatId, telegramId))
+        })
+    });
 }
 
-function handleTodayWeather(telegramId, chatId) {
+function checkIfCityExists(cityName, cb) {
+    request(`http://api.openweathermap.org/data/2.5/weather?q=${cityName}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+        if (error) return console.log(err);
+        var data = JSON.parse(body);
+        if (data.cod == "404") {
+            return cb('404');
+        }
+        cb('', data.name)
+    });
+}
+
+function handleTodayWeather(telegramId, chatId, editMessageId) {
+    const opts = {
+        reply_markup: {
+            inline_keyboard: [
+                [{
+                    text: 'نمایش جزییات کامل',
+                    // we shall check for this value when we listen
+                    // for "callback_query"
+                    callback_data: 'details-today'
+                }]
+            ]
+        }
+    };
     db.collection('users').find({
-        telegramId: telegramId
+        chatId: chatId
+    }).toArray((err, users) => {
+        request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+            console.log('error:', error); // Print the error if one occurred
+            console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
+            console.log('body:', body); // Print the HTML for the Google homepage.\
+            var data = JSON.parse(body)
+            var text = `هوای امروز ${users[0].city}\n\nوضعیت کلی: ` +
+                emojis.find(emoji => emoji[0] == data.list[0].weather[0].main)[1] + ' ' +
+                descriptionToFa.find(description => description[0] == data.list[0].weather[0].description)[1] + '\n' +
+                `\nحداکثر دما ⬆️ : ${(data.list[0].temp.max - 273.15).toFixed(1)} درجه\nحداقل دما ⬇️ : ${(data.list[0].temp.min - 273.15).toFixed(1)} درجه\n\n` +
+                `سرعت باد 💨 : ${data.list[0].speed} کیلومتر بر ساعت\n\n`;
+            if (!editMessageId) {
+                bot.sendMessage(chatId, text);
+            } else {
+                const editOpts = {
+                    chat_id: chatId,
+                    message_id: editMessageId,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{
+                                text: 'نمایش جزییات کامل',
+                                // we shall check for this value when we listen
+                                // for "callback_query"
+                                callback_data: 'details-today'
+                            }]
+                        ]
+                    }
+                };
+                bot.editMessageText(text, editOpts);
+            }
+
+        });
+    })
+}
+
+
+function handleTomorrowWeather(telegramId, chatId, editMessageId) {
+    const opts = {
+        reply_markup: {
+            inline_keyboard: [
+                [{
+                    text: 'نمایش جزییات کامل',
+                    // we shall check for this value when we listen
+                    // for "callback_query"
+                    callback_data: 'details-tomorrow'
+                }]
+            ]
+        }
+    };
+    db.collection('users').find({
+        chatId: chatId
     }).toArray((err, users) => {
         request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
             console.log('body:', body); // Print the HTML for the Google homepage.
-            bot.sendMessage(chatId, `هوای امروز ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list[0].weather[0].main);
+            var data = JSON.parse(body)
+            var text = `هوای فردای ${users[0].city}\n\nوضعیت کلی: ` +
+                emojis.find(emoji => emoji[0] == data.list[1].weather[0].main)[1] + ' ' +
+                descriptionToFa.find(description => description[0] == data.list[1].weather[0].description)[1] + '\n' +
+                `\nحداکثر دما ⬆️ : ${(data.list[1].temp.max - 273.15).toFixed(1)} درجه\nحداقل دما ⬇️ : ${(data.list[1].temp.min - 273.15).toFixed(1)} درجه\n\n` +
+                `سرعت باد 💨 : ${data.list[1].speed} کیلومتر بر ساعت\n\n`;
+            if (!editMessageId) {
+                bot.sendMessage(chatId, text);
+            } else {
+                const editOpts = {
+                    chat_id: chatId,
+                    message_id: editMessageId,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{
+                                text: 'نمایش جزییات کامل',
+                                // we shall check for this value when we listen
+                                // for "callback_query"
+                                callback_data: 'details-today'
+                            }]
+                        ]
+                    }
+                };
+                bot.editMessageText(text, editOpts);
+            }
+
         });
     })
 }
 
-
-function handleTomorrowWeather(telegramId, chatId) {
+function handle5daysForecastWeather(telegramId, chatId, city, editingMsgId) {
+    const opts = {
+        reply_markup: {
+            inline_keyboard: [
+                [{
+                    text: 'نمایش جزییات کامل',
+                    // we shall check for this value when we listen
+                    // for "callback_query"
+                    callback_data: 'details'
+                }]
+            ]
+        }
+    };
+    if (city) {
+        request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
+            console.log('error:', error); // Print the error if one occurred
+            console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
+            console.log('body:', body); // Print the HTML for the Google homepage.
+            var data = JSON.parse(body)
+            bot.sendLocation(chatId, data.city.coord.lat, data.city.coord.lon)
+            bot.sendMessage(chatId, `هوای 6 روز آینده ${data.city.name}\n\n` + JSON.parse(body).list.map((l, i) => `${i == 0? 'امروز': i == 1? 'فردا' : '' } ${moment.unix(l.dt).format("dddd")} : ${emojis.find(emoji => emoji[0] == l.weather[0].main)[1]} ${descriptionToFa.find(description => description[0] == l.weather[0].description)[1]}`).join("\n") + '\n', opts);
+        });
+        return;
+    }
     db.collection('users').find({
-        telegramId: telegramId
+        chatId: chatId
     }).toArray((err, users) => {
+        if (!users[0].city) {
+            return;
+        }
         request(`http://api.openweathermap.org/data/2.5/forecast/daily?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
             console.log('error:', error); // Print the error if one occurred
             console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
             console.log('body:', body); // Print the HTML for the Google homepage.
-            bot.sendMessage(chatId, `هوای فردای ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list[1].weather[0].main);
+            var text = `هوای 6 روز آینده ${users[0].city}\n\n` + JSON.parse(body).list.map((l, i) => `${i == 0? 'امروز': i == 1? 'فردا' : '' } ${moment.unix(l.dt).format("dddd")} : ${emojis.find(emoji => emoji[0] == l.weather[0].main)[1]} ${descriptionToFa.find(description => description[0] == l.weather[0].description)[1]}`).join("\n") + '\n'
+            if (!editingMsgId) {
+                bot.sendMessage(chatId, text, opts);
+            } else {
+                const editOpts = {
+                    chat_id: chatId,
+                    message_id: editingMsgId,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{
+                                text: 'نمایش جزییات کامل',
+                                // we shall check for this value when we listen
+                                // for "callback_query"
+                                callback_data: 'details'
+                            }]
+                        ]
+                    }
+                };
+                bot.editMessageText(text, editOpts);
+            }
+
         });
     })
 }
 
-function handle5daysForecastWeather(telegramId, chatId) {
-    var emojis = [
-        ['Rain', '🌧'],
-        ['Clear', '☀️'],
-        ['Clouds', '☁️']
-    ];
-    db.collection('users').find({
-        telegramId: telegramId
-    }).toArray((err, users) => {
-        request(`http://api.openweathermap.org/data/2.5/forecast?q=${users[0].city}&APPID=f311a0682747102619138c028ec41c0e`, function (error, response, body) {
-            console.log('error:', error); // Print the error if one occurred
-            console.log('statusCode:', response && response.statusCode); // Print the response status code if a response was received
-            console.log('body:', body); // Print the HTML for the Google homepage.
-            bot.sendMessage(chatId, `هوای فردای ${users[0].city}\nوضعیت کلی: ` + JSON.parse(body).list.map((l, i) => `${i}. ${emojis.find(emoji => emoji[0] == l.weather[0].main)[1]} ${l.weather[0].main}`).join("\n"));
-        });
-    })
-}
-//یس
 function handleSettings(telegramId, chatId) {
     const opts = {
         reply_markup: JSON.stringify({
@@ -172,12 +325,56 @@ function handleBack(telegramId, chatId) {
         reply_markup: JSON.stringify({
             keyboard: [
                 ['هوای امروز', 'هوای فردا'],
-                ['5 روز آینده', 'تنظیمات']
+                ['6 روز آینده', 'تنظیمات']
             ]
         })
     };
     bot.sendMessage(chatId, 'بازگشت', opts);
 }
+
+bot.on('callback_query', function onCallbackQuery(callbackQuery) {
+    const action = callbackQuery.data;
+    const msg = callbackQuery.message;
+    const opts = {
+        chat_id: msg.chat.id,
+        message_id: msg.message_id,
+        reply_markup: {
+            inline_keyboard: [
+                [{
+                    text: 'نمایش کلی',
+                    // we shall check for this value when we listen
+                    // for "callback_query"
+                    callback_data: action.replace('summary', 'details').replace('details', 'summary')
+                }]
+            ]
+        }
+    };
+    let text;
+
+    if (action === 'details' || action === 'details-today' || action === 'details-tomorrow') {
+        text = 'جزییات کامل هواشناسی به زودی....';
+    }
+    if (action === 'summary') {
+        return handle5daysForecastWeather(undefined, msg.chat.id, undefined, msg.message_id)
+    }
+    if (action === 'summary-today') {
+        return handleTodayWeather(undefined, msg.chat.id, msg.message_id)
+    }
+    if (action === 'summary-tomorrow') {
+        return handleTomorrowWeather(undefined, msg.chat.id, msg.message_id)
+    }
+    bot.editMessageText(text, opts);
+});
+
+bot.onText(/\/emruz/, function onPhotoText(msg) {
+    handleTodayWeather(msg.from.id, msg.chat.id);
+});
+bot.onText(/\/farda/, function onPhotoText(msg) {
+    handleTomorrowWeather(msg.from.id, msg.chat.id);
+});
+bot.onText(/\/6ruz/, function onPhotoText(msg) {
+    handle5daysForecastWeather(msg.from.id, msg.chat.id);
+});
 /*{
     "coord": {
         "lon": 58.68,
